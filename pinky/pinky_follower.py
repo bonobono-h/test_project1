@@ -1,109 +1,218 @@
+import sys
+import os
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from sensor_msgs.msg import LaserScan
 from ultralytics import YOLO
 import cv2
+import threading
+import time
+import math
+import numpy as np
+from PIL import Image
 
-class PinkyFollower(Node):
+# 하드웨어 라이브러리 로드
+sys.path.append(os.path.expanduser('~') + '/catkin_ws/src/pinky_follower/src')
+try:
+    from pinkylib import LED
+    from pinky_lcd import LCD
+except ImportError:
+    print("⚠️ 하드웨어 라이브러리 로드 실패")
+
+latest_raw_frame = None   
+
+def camera_thread():
+    global latest_raw_frame
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1) 
+    while True:
+        cap.grab()
+        ret, frame = cap.retrieve()
+        if ret:
+            latest_raw_frame = cv2.resize(cv2.flip(frame, -1), (320, 240))
+        time.sleep(0.001)
+
+class PinkyFullSystem(Node):
     def __init__(self):
-        super().__init__('pinky_follower')
-        # 1. 퍼블리셔 및 AI 세팅
+        super().__init__('pinky_full_system')
         self.publisher = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.model = YOLO('yolov8n.pt')
+        self.lidar_sub = self.create_subscription(LaserScan, '/scan', self.lidar_callback, 10)
         
-        self.center_x = 320      
-        self.kp = 0.002          
-        self.linear_speed = 0.08 
+        self.model = YOLO('yolov8n.pt') 
+        
+        try:
+            self.leds = LED()
+            self.lcd = LCD()
+        except:
+            self.leds, self.lcd = None, None
+            print("❌ 하드웨어 연결 실패")
+
+        # --- 제어 파라미터 ---
+        self.target_id = None
+        self.center_x = 160 
+        self.kp = 0.007      
+        self.kd = 0.006      
+        self.prev_error = 0.0     
+        self.max_speed = 0.25   
+        self.emergency_stop = False
+
+        # 🔥 [LiDAR 센서 퓨전용 파라미터 추가]
+        self.target_distance = 0.45  # 로봇이 멈출 정확한 목표 거리 (0.015m = 1.5cm)
+        self.front_distance = 999.0 # 라이다 정면 실제 거리 저장용
+
+        # --- 자동 재인식 로직용 변수 ---
+        self.lost_count = 0
+        self.lost_threshold = 100  
+        
+        # 상태 관리
+        self.current_state = "WAITING"
+        self.rainbow_offset = 0
+        self.last_lcd_update = 0
+        self.COLORS = {
+            'RED': (255, 0, 0), 'GREEN': (0, 255, 0), 'BLUE': (0, 0, 255),
+            'ORANGE': (255, 127, 0), 'YELLOW': (255, 255, 0), 
+            'VIOLET': (148, 0, 211), 'BLACK': (0, 0, 0), 'WHITE': (255, 255, 255)
+        }
+
+    def lidar_callback(self, data):
+        # 1. 비상 정지용 (전방 80도 범위 내 15cm 이내 장애물)
+        ranges = [r for r in (data.ranges[:40] + data.ranges[-40:]) if 0.05 < r < 10.0 and not math.isinf(r)]
+        self.emergency_stop = True if ranges and min(ranges) < 0.15 else False
+
+        # 🔥 2. 정면 거리 측정용 (전방 30도 범위의 물체 거리 정밀 측정)
+        front_ranges = data.ranges[:15] + data.ranges[-15:]
+        valid_front = [r for r in front_ranges if 0.05 < r < 10.0 and not math.isinf(r)]
+        if valid_front:
+            self.front_distance = min(valid_front)
+        else:
+            self.front_distance = 999.0
+
+    def update_leds(self):
+        if self.emergency_stop:
+            self.leds.fill(self.COLORS['RED'])
+        elif self.current_state == "FOLLOWING":
+            rainbow = [self.COLORS['RED'], self.COLORS['ORANGE'], self.COLORS['YELLOW'], 
+                       self.COLORS['GREEN'], self.COLORS['BLUE'], self.COLORS['VIOLET']]
+            for i in range(8):
+                self.leds.set_pixel(i, rainbow[(i + self.rainbow_offset) % len(rainbow)])
+            self.rainbow_offset += 1
+        elif self.current_state == "ARRIVED":
+            self.leds.fill(self.COLORS['GREEN'])
+        else:
+            self.leds.fill(self.COLORS['BLUE'])
+        self.leds.show()
+
+    def draw_overlay(self, frame, text, color):
+        cv2.rectangle(frame, (0, 200), (320, 240), (0, 0, 0), -1)
+        font = cv2.FONT_HERSHEY_DUPLEX
+        cv2.putText(frame, text, (10, 230), font, 0.7, color, 2, cv2.LINE_AA)
+        return frame
 
     def run(self):
-        # 1. OpenCV로 카메라의 통제권을 우리가 직접 가져옴!
-        cap = cv2.VideoCapture(0)
-        
-        while rclpy.ok() and cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                print("카메라 영상을 가져올 수 없습니다!")
-                break
-
-            # 🌟 [마법의 1줄] 소프트웨어 치료: 상하좌우(-1) 180도 뒤집기!
-            flipped_frame = cv2.flip(frame, -1)
-
-            # 2. 뒤집힌 정상 화면을 YOLO에게 먹이기 (persist=True로 ID 유지)
-            results = self.model.track(source=flipped_frame, persist=True, tracker="bytetrack.yaml", classes=0, verbose=False)
+        global latest_raw_frame
+        while rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.0)
+            if latest_raw_frame is None: continue
             
-            # 리스트로 나오는 결과에서 첫 번째(현재) 프레임만 빼옴
+            frame = latest_raw_frame.copy()
+            results = self.model.track(source=frame, persist=True, tracker="bytetrack.yaml", classes=0, verbose=False, imgsz=160)
             r = results[0]
             msg = Twist()
-            boxes = r.boxes
             
-            if len(boxes) > 0:
-                best_box = None
-                min_dist = 9999
-                
-                for box in boxes:
-                    if box.id is not None:
-                        x1, y1, x2, y2 = box.xyxy[0]
-                        cx = int((x1 + x2) / 2)
-                        dist = abs(self.center_x - cx)
-                        
-                        if dist < min_dist:
-                            min_dist = dist
-                            best_box = box
-                
-                if best_box is not None:
-                    x1, y1, x2, y2 = best_box.xyxy[0]
-                    cx = int((x1 + x2) / 2)
-                    error = self.center_x - cx
-    
-                    # 조향 (방향 제어)
-                    msg.angular.z = -float(error * self.kp) 
-                    
-                    # 거리 제어
-                    box_height = y2 - y1 
-                    screen_height = 480  
-                    
-                    if box_height > screen_height * 0.7:
-                        msg.linear.x = 0.0
-                        print(f"🛑 대기 모드 (Box: {box_height:.1f})")
-                    elif box_height < screen_height * 0.3:
-                        msg.linear.x = self.linear_speed * 1.5 
-                        print(f"🏃‍♂️ 추격 모드 (Box: {box_height:.1f})")
-                    else:
-                        msg.linear.x = self.linear_speed
-                        print(f"🐕 쫄쫄 따라가는 중 (Box: {box_height:.1f})")
+            self.current_state = "WAITING"
+            status_text = "WAITING TARGET"
+            text_color = self.COLORS['BLUE']
+            
+            found_target_this_frame = False
 
-                else:
-                    msg.linear.x = 0.0
-                    msg.angular.z = 0.0
-            else:
-                msg.linear.x = 0.0
-                msg.angular.z = 0.0
-                print("👀 타겟 찾는 중...")
+            if r.boxes and r.boxes.id is not None:
+                best_box = None
+                for box in r.boxes:
+                    idx = int(box.id[0])
+                    
+                    if self.target_id is None:
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        cx = (x1 + x2) / 2
+                        if 40 < cx < 280:
+                            self.target_id = idx
+                            print(f"🎯 주인님 감지! ID: {idx}")
+
+                    if idx == self.target_id:
+                        best_box = box
+                        found_target_this_frame = True
+                        self.lost_count = 0 
+                        break
+
+                if best_box is not None:
+                    x1, y1, x2, y2 = best_box.xyxy[0].cpu().numpy()
+                    cx = (x1 + x2) / 2
+                    
+                    # 🔥 회전 제어 (YOLO 시각 정보 사용 - PD 제어)
+                    error = self.center_x - cx
+                    angular = (error * self.kp) + (error - self.prev_error) * self.kd
+                    msg.angular.z = float(max(-3.0, min(3.0, angular)))
+                    self.prev_error = error
+                    
+                    # 🔥 전진 제어 (LiDAR 거리 정보 사용)
+                    # 박스 크기(h) 대신 front_distance로 판단합니다!
+                    if self.front_distance > self.target_distance + 0.3:
+                        msg.linear.x = self.max_speed
+                        self.current_state = "FOLLOWING"
+                        status_text = f"FOLLOW ({self.front_distance:.2f}m)"
+                        text_color = self.COLORS['WHITE']
+                        
+                    elif self.front_distance > self.target_distance:
+                        msg.linear.x = self.max_speed * 0.4 # 감속
+                        self.current_state = "FOLLOWING"
+                        status_text = f"SLOW ({self.front_distance:.2f}m)"
+                        text_color = self.COLORS['YELLOW']
+                        
+                    else:
+                        msg.linear.x = 0.0 # 정지
+                        self.current_state = "ARRIVED"
+                        status_text = f"ARRIVED ({self.front_distance:.2f}m)"
+                        text_color = self.COLORS['GREEN']
+                    
+                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+
+            if not found_target_this_frame and self.target_id is not None:
+                self.lost_count += 1
+                status_text = f"LOST.. {self.lost_threshold - self.lost_count}"
+                if self.lost_count > self.lost_threshold:
+                    print("⚠️ 주인님을 놓쳤습니다. 다시 찾습니다.")
+                    self.target_id = None
+                    self.lost_count = 0
+                    self.prev_error = 0.0
+
+            if self.emergency_stop:
+                msg.linear.x, msg.angular.z = 0.0, 0.0
+                self.current_state = "EMERGENCY"
+                status_text = "!!! EMERGENCY !!!"
+                text_color = self.COLORS['RED']
 
             self.publisher.publish(msg)
 
-            # 3. 네 노트북(-X 포워딩)으로 YOLO 박스 그려진 정상 화면 띄우기!
-            annotated_frame = r.plot() 
-            cv2.imshow("Pinky Vision (Flipped)", annotated_frame)
-            
-            # 터미널에서 실행 중일 때 영상 창 클릭하고 'q' 누르면 우아하게 종료
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-                
-        # 종료 시 카메라 자원 해제
-        cap.release()
-        cv2.destroyAllWindows()
+            if self.leds: self.update_leds()
+
+            if self.lcd and (time.time() - self.last_lcd_update > 0.05):
+                frame = self.draw_overlay(frame, status_text, (text_color[2], text_color[1], text_color[0]))
+                img_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                self.lcd.img_show(img_pil)
+                self.last_lcd_update = time.time()
 
 def main():
     rclpy.init()
-    node = PinkyFollower()
+    threading.Thread(target=camera_thread, daemon=True).start()
+    node = PinkyFullSystem()
     try:
         node.run()
     except KeyboardInterrupt:
-        stop_msg = Twist()
-        node.publisher.publish(stop_msg)
-        print("\n🛑 제어 종료")
+        pass
     finally:
+        node.publisher.publish(Twist())
+        if node.leds: node.leds.fill((0,0,0)); node.leds.show(); node.leds.close()
+        if node.lcd: node.lcd.close()
         node.destroy_node()
         rclpy.shutdown()
 
