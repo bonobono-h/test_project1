@@ -38,7 +38,7 @@ class VicPinkyUdpFollower(Node):
         self.deadzone = 15  # 중앙 ±15px 이내면 회전 무시
 
         self.lost_count = 0
-        self.lost_threshold = 30  # 타겟 놓치고 버티는 프레임 수
+        self.lost_threshold = 50  # 타겟 놓치고 버티는 프레임 수
         self.current_state = "WAITING"
         self.last_angular_dir = 0.0  # 마지막으로 회전하던 방향 (부호)
 
@@ -173,7 +173,7 @@ class VicPinkyUdpFollower(Node):
                 if not found_target_this_frame and self.target_id is not None:
                     self.lost_count += 1
                     msg.linear.x = 0.0
-                    msg.angular.z = self.last_angular_dir * 0.4  # 탐색 회전
+                    msg.angular.z = self.last_angular_dir * 0.7  # 탐색 회전 (90도 코너 대응)
                     self.current_state = f"SEARCHING ({self.lost_threshold - self.lost_count})"
                     if self.lost_count > self.lost_threshold:
                         self.target_id = None
