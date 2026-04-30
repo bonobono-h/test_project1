@@ -37,8 +37,9 @@ class VicPinkyUdpFollower(Node):
         self.deadzone = 15  # 중앙 ±15px 이내면 회전 무시
 
         self.lost_count = 0
-        self.lost_threshold = 15  # 타겟 놓치고 버티는 프레임 수
+        self.lost_threshold = 30  # 타겟 놓치고 버티는 프레임 수
         self.current_state = "WAITING"
+        self.last_angular_dir = 0.0  # 마지막으로 회전하던 방향 (부호)
 
         # 360도 스캔 결과
         self.closest_distance = 999.0
@@ -150,6 +151,8 @@ class VicPinkyUdpFollower(Node):
                             angular = (error * self.kp) + (error - self.prev_error) * self.kd
                             msg.angular.z = float(max(-1.2, min(1.2, angular)))
                             self.prev_error = error
+                            if abs(angular) > 0.05:
+                                self.last_angular_dir = 1.0 if angular > 0 else -1.0
 
                             # 직진 제어 (라이다 거리 기준)
                             if self.front_distance > self.target_distance + 0.3:
@@ -163,13 +166,15 @@ class VicPinkyUdpFollower(Node):
                             cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
                             break
 
-                # 3. 안전 로직 (타겟 놓치면 정지)
+                # 3. 안전 로직 (타겟 놓치면 마지막 방향으로 탐색 회전)
                 if not found_target_this_frame and self.target_id is not None:
                     self.lost_count += 1
-                    msg.linear.x, msg.angular.z = 0.0, 0.0
-                    self.current_state = f"LOST ({self.lost_threshold - self.lost_count})"
+                    msg.linear.x = 0.0
+                    msg.angular.z = self.last_angular_dir * 0.4  # 탐색 회전
+                    self.current_state = f"SEARCHING ({self.lost_threshold - self.lost_count})"
                     if self.lost_count > self.lost_threshold:
                         self.target_id = None
+                        msg.angular.z = 0.0
 
                 # 라이다에서 앞이 막혔다고 판단하면 긴급 정지
                 if self.emergency_stop:
