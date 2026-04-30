@@ -27,8 +27,9 @@ class VicPinkyUdpFollower(Node):
         # 제어 변수들
         self.target_id = None
         self.center_x = 160  # 320 해상도의 절반
-        self.kp, self.kd = 0.005, 0.002
+        self.kp, self.kd = 0.004, 0.0
         self.prev_error = 0.0
+        self.smooth_error = 0.0  # EMA 필터링된 에러
         self.max_speed = 0.20
         self.emergency_stop = False
         self.target_distance = 0.50
@@ -148,7 +149,9 @@ class VicPinkyUdpFollower(Node):
                             error = self.center_x - cx
                             if abs(error) < self.deadzone:
                                 error = 0.0
-                            angular = (error * self.kp) + (error - self.prev_error) * self.kd
+                            # EMA 저역통과 필터 (alpha=0.4: 빠른 반응 + 노이즈 제거)
+                            self.smooth_error = 0.4 * error + 0.6 * self.smooth_error
+                            angular = self.smooth_error * self.kp
                             msg.angular.z = float(max(-1.2, min(1.2, angular)))
                             self.prev_error = error
                             if abs(angular) > 0.05:
