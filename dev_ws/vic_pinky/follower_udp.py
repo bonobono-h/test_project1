@@ -30,9 +30,9 @@ class VicPinkyUdpFollower(Node):
         self.kp, self.kd = 0.004, 0.0
         self.prev_error = 0.0
         self.smooth_error = 0.0  # EMA 필터링된 에러
-        self.max_speed = 0.20
+        self.max_speed = 0.30
         self.emergency_stop = False
-        self.target_distance = 0.50
+        self.target_distance = 0.75
         self.front_distance = 999.0
         self.ignore_dist = 0.22
         self.deadzone = 15  # 중앙 ±15px 이내면 회전 무시
