@@ -8,8 +8,12 @@ import socket
 import numpy as np
 import math
 
-LISTEN_IP = "0.0.0.0" 
+LISTEN_IP = "0.0.0.0"
 LISTEN_PORT = 5005
+
+# 빅핑키 프로파일러(지지대) 4개 방위각 — 360도 스캔 시 제외
+PILLAR_ANGLES_DEG = [162.0, 200.0, 338.7, 23.3]
+PILLAR_HALF_WIDTH = 10  # ±10도 범위 제외
 
 class VicPinkyUdpFollower(Node):
     def __init__(self):
@@ -36,6 +40,11 @@ class VicPinkyUdpFollower(Node):
         self.lost_threshold = 15  # 타겟 놓치고 버티는 프레임 수
         self.current_state = "WAITING"
 
+        # 360도 스캔 결과
+        self.closest_distance = 999.0
+        self.closest_angle_deg = 0.0
+        self._lidar_log_counter = 0
+
         # UDP 소켓 수신기 세팅
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((LISTEN_IP, LISTEN_PORT))
@@ -43,15 +52,56 @@ class VicPinkyUdpFollower(Node):
 
         self.get_logger().info("🚀 하이브리드(UDP+ROS2) AI 추종 시스템 가동 완료!")
 
+    def _is_pillar(self, angle_deg):
+        for pa in PILLAR_ANGLES_DEG:
+            diff = abs((angle_deg - pa + 180) % 360 - 180)
+            if diff <= PILLAR_HALF_WIDTH:
+                return True
+        return False
+
     def lidar_callback(self, data):
-        # 전방 장애물 체크 (충돌 방지)
-        valid_ranges = [r for r in (data.ranges[:40] + data.ranges[-40:]) 
-                        if self.ignore_dist < r < 10.0 and not math.isinf(r)]
-        self.emergency_stop = bool(valid_ranges and min(valid_ranges) < 0.15)
-        
-        front_ranges = data.ranges[:15] + data.ranges[-15:]
-        valid_front = [r for r in front_ranges if self.ignore_dist < r < 10.0 and not math.isinf(r)]
-        self.front_distance = min(valid_front) if valid_front else 999.0
+        angle_min = data.angle_min
+        angle_inc = data.angle_increment
+
+        closest_d = 999.0
+        closest_a = 0.0
+        front_vals = []
+        emergency_vals = []
+
+        for i, r in enumerate(data.ranges):
+            if math.isinf(r) or math.isnan(r) or not (self.ignore_dist < r < 10.0):
+                continue
+            angle_deg = math.degrees(angle_min + i * angle_inc) % 360
+
+            # 프로파일러 각도 제외
+            if self._is_pillar(angle_deg):
+                continue
+
+            # 360도 최근접 물체
+            if r < closest_d:
+                closest_d = r
+                closest_a = angle_deg
+
+            # 전방 ±40° — 비상정지 판단
+            if angle_deg <= 40 or angle_deg >= 320:
+                emergency_vals.append(r)
+
+            # 전방 ±15° — 추종 거리 판단
+            if angle_deg <= 15 or angle_deg >= 345:
+                front_vals.append(r)
+
+        self.closest_distance = closest_d
+        self.closest_angle_deg = closest_a
+        self.emergency_stop = bool(emergency_vals and min(emergency_vals) < 0.15)
+        self.front_distance = min(front_vals) if front_vals else 999.0
+
+        # 10프레임마다 터미널에 출력
+        self._lidar_log_counter += 1
+        if self._lidar_log_counter >= 10:
+            self._lidar_log_counter = 0
+            self.get_logger().info(
+                f"[LIDAR] 최근접 물체 — 거리: {closest_d:.2f}m | 방위각: {closest_a:.1f}°"
+            )
 
     def run(self):
         while rclpy.ok():
@@ -128,8 +178,11 @@ class VicPinkyUdpFollower(Node):
 
                 # 5. 노트북 화면에 상태 띄우기 (2배 확대)
                 display_frame = cv2.resize(frame, (640, 480))
-                cv2.putText(display_frame, f"State: {self.current_state}", (10, 30), 
+                cv2.putText(display_frame, f"State: {self.current_state}", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                cv2.putText(display_frame,
+                            f"Near: {self.closest_distance:.2f}m @ {self.closest_angle_deg:.1f}deg",
+                            (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
                 cv2.imshow("VicPinky AI Brain (UDP+ROS2)", display_frame)
                 
                 if cv2.waitKey(1) & 0xFF == ord('q'): 
