@@ -149,8 +149,11 @@ class VicPinkyUdpFollower(Node):
                             error = self.center_x - cx
                             if abs(error) < self.deadzone:
                                 error = 0.0
-                            # EMA 저역통과 필터 (alpha=0.4: 빠른 반응 + 노이즈 제거)
-                            self.smooth_error = 0.4 * error + 0.6 * self.smooth_error
+                            # 오차 크면(사람이 화면 끝) 빠르게, 작으면 EMA로 부드럽게
+                            if abs(error) > 60:
+                                self.smooth_error = error
+                            else:
+                                self.smooth_error = 0.4 * error + 0.6 * self.smooth_error
                             angular = self.smooth_error * self.kp
                             msg.angular.z = float(max(-1.2, min(1.2, angular)))
                             self.prev_error = error
