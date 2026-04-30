@@ -12,7 +12,7 @@ LISTEN_IP = "0.0.0.0"
 LISTEN_PORT = 5005
 
 # 빅핑키 프로파일러(지지대) 4개 방위각 — 360도 스캔 시 제외
-PILLAR_ANGLES_DEG = [162.0, 200.0, 338.7, 23.3]
+PILLAR_ANGLES_DEG = [162.0, 200.0, 245.3, 338.7, 23.3]
 PILLAR_HALF_WIDTH = 10  # ±10도 범위 제외
 
 class VicPinkyUdpFollower(Node):
@@ -33,7 +33,7 @@ class VicPinkyUdpFollower(Node):
         self.emergency_stop = False
         self.target_distance = 0.50
         self.front_distance = 999.0
-        self.ignore_dist = 0.20
+        self.ignore_dist = 0.22
         self.deadzone = 15  # 중앙 ±15px 이내면 회전 무시
 
         self.lost_count = 0
