@@ -69,11 +69,18 @@ class VicPinkyUdpFollower(Node):
         emergency_vals = []
 
         for i, r in enumerate(data.ranges):
-            if math.isinf(r) or math.isnan(r) or not (self.ignore_dist < r < 10.0):
+            if math.isinf(r) or math.isnan(r) or r < 0.05 or r > 10.0:
                 continue
             angle_deg = math.degrees(angle_min + i * angle_inc) % 360
 
-            # 프로파일러 각도 제외
+            # 비상정지: 로봇 전방(180°) ±40° — 프로파일러 제외, ignore_dist 미적용
+            if 140 <= angle_deg <= 220 and not self._is_pillar(angle_deg):
+                emergency_vals.append(r)
+
+            # 이하는 ignore_dist 적용 (전방 기둥 노이즈 제거)
+            if r <= self.ignore_dist:
+                continue
+
             if self._is_pillar(angle_deg):
                 continue
 
@@ -82,17 +89,13 @@ class VicPinkyUdpFollower(Node):
                 closest_d = r
                 closest_a = angle_deg
 
-            # 전방 ±40° — 비상정지 판단
-            if angle_deg <= 40 or angle_deg >= 320:
-                emergency_vals.append(r)
-
-            # 전방 ±15° — 추종 거리 판단
-            if angle_deg <= 15 or angle_deg >= 345:
+            # 전방 ±15° (라이다 180° 기준) — 추종 거리 판단
+            if 165 <= angle_deg <= 195:
                 front_vals.append(r)
 
         self.closest_distance = closest_d
         self.closest_angle_deg = closest_a
-        self.emergency_stop = bool(emergency_vals and min(emergency_vals) < 0.15)
+        self.emergency_stop = bool(emergency_vals and min(emergency_vals) < 0.30)
         self.front_distance = min(front_vals) if front_vals else 999.0
 
         # 10프레임마다 터미널에 출력
