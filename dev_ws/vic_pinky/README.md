@@ -134,3 +134,121 @@ python3 udp_sender.py # 카메라 송출 (별도 터미널)
 - RPLIDAR C1 시리얼 포트: `/dev/ttyUSB2`
 - `laser_link` 마운트: `rpy="0 0 π"` (180° 회전) → 스캔 0° = 로봇 후방, 180° = 로봇 전방
 - 프로파일러(지지대) 4개: 23.3°, 162.0°, 200.0°, 338.7° (실측값)
+
+---
+
+# Nav2 자율 주행 시스템
+
+SLAM으로 지도를 만들고 Nav2로 목표 좌표까지 자율 주행합니다.
+
+---
+
+## 파일 구조 (Nav2)
+
+```
+vic_pinky/
+├── slam.sh              # [노트북] SLAM 지도 제작 실행
+├── slam_params.yaml     # SLAM 파라미터
+├── save_map.sh          # [노트북] 지도 저장
+├── nav2.sh              # [노트북] Nav2 자율 주행 실행
+├── nav2_params.yaml     # Nav2 파라미터
+└── cyclone_vicpinky.xml # CycloneDDS 설정 (FastDDS 대신 사용 시)
+```
+
+---
+
+## 1단계: SLAM 지도 제작
+
+### 빅핑키에서
+```bash
+~/bringup.sh
+```
+
+### 노트북에서 (터미널 3개)
+
+**터미널 1 — SLAM 실행:**
+```bash
+cd ~/dev_ws/vic_pinky && ./slam.sh
+```
+
+**터미널 2 — 로봇 조종 (키보드 또는 추종):**
+```bash
+# 키보드 조종
+source /opt/ros/jazzy/setup.bash && export ROS_DOMAIN_ID=28
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
+# 또는 AI 추종으로 지도 제작
+./run.sh
+```
+
+**터미널 3 — RViz2 시각화:**
+```bash
+source /opt/ros/jazzy/setup.bash && export ROS_DOMAIN_ID=28 && rviz2
+```
+
+지도가 완성되면 **터미널 4** 에서 저장:
+```bash
+cd ~/dev_ws/vic_pinky && ./save_map.sh
+# → ~/my_map.yaml, ~/my_map.pgm 저장됨
+```
+
+> SLAM 종료 후 Nav2 실행 (동시 실행 불가)
+
+---
+
+## 2단계: Nav2 자율 주행
+
+### 빅핑키에서
+```bash
+~/bringup.sh
+```
+
+### 노트북에서 (터미널 2개)
+
+**터미널 1 — Nav2 실행:**
+```bash
+cd ~/dev_ws/vic_pinky && ./nav2.sh /home/hong/my_map.yaml
+```
+> `Managed nodes are active` 메시지 나올 때까지 대기 (약 15~20초)
+
+**터미널 2 — RViz2:**
+```bash
+source /opt/ros/jazzy/setup.bash && export ROS_DOMAIN_ID=28 && rviz2
+```
+
+### RViz2 설정
+1. Displays 패널 → **Add** → `Map` (Topic: `/map`)
+2. Displays 패널 → **Add** → `LaserScan` (Topic: `/scan`)
+3. 맵이 안 보이면 터미널에서 맵 재발행:
+```bash
+source /opt/ros/jazzy/setup.bash && export ROS_DOMAIN_ID=28
+ros2 service call /map_server/load_map nav2_msgs/srv/LoadMap "{map_url: '/home/hong/my_map.yaml'}"
+```
+
+### 자율 주행 시작
+1. RViz2 상단 **"2D Pose Estimate"** 클릭 → 로봇 현재 위치+방향 클릭+드래그
+2. RViz2 상단 **"2D Goal Pose"** 클릭 → 목적지 클릭+드래그
+3. 로봇 출발!
+
+---
+
+## Nav2 트러블슈팅
+
+| 증상 | 원인 | 해결 |
+|------|------|------|
+| 맵이 RViz2에 안 보임 | QoS 불일치 | `load_map` 서비스 재호출 |
+| 로봇이 안 움직임 | bt_navigator inactive | `ros2 lifecycle set /bt_navigator activate` |
+| 로봇이 삥글삥글 돔 | Pose Estimate 방향 틀림 | Pose Estimate 다시 설정 (LaserScan 보면서 맞추기) |
+| cmd_vel 안 나옴 | velocity_smoother 문제 | nav2.sh 내 relay 자동 실행됨 |
+
+---
+
+## 주요 파라미터 (`nav2_params.yaml`)
+
+| 파라미터 | 값 | 설명 |
+|---------|-----|------|
+| `robot_radius` | 0.30m | 로봇 반경 |
+| `inflation_radius` | 0.30m | 장애물 팽창 반경 (좁은 문 통과용) |
+| `desired_linear_vel` | 0.25 m/s | 목표 직진 속도 |
+| `max_velocity` | 0.30 m/s | 최대 속도 |
+| `use_rotate_to_heading` | false | 주행 중 회전 비활성화 |
