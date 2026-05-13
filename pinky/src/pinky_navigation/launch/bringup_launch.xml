@@ -1,9 +1,9 @@
 <?xml version='1.0'?>
 <launch>
     <set_env name="RCUTILS_LOGGING_BUFFERED_STREAM" value="1"/>
-
-    <arg name="namespace" default=""/>
-    <arg name="map" default=""/>
+<!-- 아규먼트 정리 맵도 인지로 받고 params =nav2_params , composition = True-->-
+    <arg name="namespace" default=""/>  <!--변수를 쭉 선언해놓은거임 -->
+    <arg name="map" default="$(find-pkg-share pinky_navigation)/map/my_map.yaml"/>
     <arg name="use_sim_time" default="False"/>
     <arg name="params_file" default="$(find-pkg-share pinky_navigation)/params/nav2_params.yaml"/>
     <arg name="autostart" default="True"/>
@@ -13,12 +13,13 @@
     <arg name="log_level" default="info"/>
     <arg name="lifecycle_nodes_local" default="['map_server', 'amcl']"/>
     <arg name="lifecycle_nodes_nav" default="['controller_server',
+                       'smoother_server',
                        'planner_server',
                        'behavior_server',
                        'bt_navigator',
                        'waypoint_follower',
                        'velocity_smoother']"/>
-
+    <!-- group componenet container isolated-->-
     <group>
         <push-ros-namespace namespace="$(var namespace)"/>
         <node pkg="rclcpp_components" exec="component_container_isolated" name='$(var container_name)' output="screen" args="--ros-args --log-level $(var log_level)">
@@ -54,3 +55,10 @@
     </group>
 
 </launch>
+
+
+<!-- localization_launch.xml : 리소스공유 , 지도설정 ,라이프사이클 
+
+navigation_launch--> 
+
+<!-- -->-->

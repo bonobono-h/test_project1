@@ -13,7 +13,7 @@
     <arg name="use_respawn" default="False"/>
     <arg name="log_level" default="info"/>
     <arg name="lifecycle_nodes" default="['map_server', 'amcl']"/>
-
+    <!-- 관리하는 노드들 map_server ,;life cycle, var use_composition-->-
     <load_composable_node target="$(var container_name)" if="$(var use_composition)">    
         <composable_node pkg="nav2_map_server" plugin="nav2_map_server::MapServer" name="map_server">            
             <param from="$(var params_file)"/>
@@ -31,7 +31,8 @@
             <remap from="/tf" to="tf"/>
             <remap from="/tf_static" to="tf_static"/>
         </composable_node>  
-
+            <!-- amcl : 이건 localization 에 대한이야기 라이더가있고 맵이있는데 내위치를 어떻게 특정지을수있느냐 
+            그거에대한것들-->-
         <composable_node pkg="nav2_lifecycle_manager" plugin="nav2_lifecycle_manager::LifecycleManager" name="lifecycle_manager_localization">            
             <param name='use_sim_time' value="$(var use_sim_time)"/>
             <param name='autostart' value="$(var autostart)"/>

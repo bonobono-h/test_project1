@@ -1,3 +1,14 @@
+lifecycle_manager_navigation:
+  ros__parameters:
+    node_names:
+      - controller_server
+      - smoother_server
+      - planner_server
+      - behavior_server
+      - velocity_smoother
+      - bt_navigator
+      - waypoint_follower
+
 amcl:
   ros__parameters:
     use_sim_time: False
@@ -31,6 +42,12 @@ amcl:
     save_pose_rate: 0.5
     recovery_alpha_fast: 0.0
     recovery_alpha_slow: 0.0
+    set_initial_pose: true
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
 
 bt_navigator:
   ros__parameters:
@@ -92,7 +109,7 @@ controller_server:
       regulated_linear_scaling_min_radius: 0.9
       regulated_linear_scaling_min_speed: 0.25
       use_rotate_to_heading: false
-      allow_reversing: false
+      allow_reversing: true
       rotate_to_heading_min_angle: 0.785
       max_angular_accel: 3.2
       max_robot_pose_search_dist: 10.0
@@ -243,7 +260,7 @@ velocity_smoother:
     scale_velocities: False
     feedback: "OPEN_LOOP"
     max_velocity: [0.30, 0.0, 0.9]
-    min_velocity: [-0.10, 0.0, -0.9]
+    min_velocity: [-0.20, 0.0, -0.9]
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
     odom_topic: "odom"
@@ -291,7 +308,7 @@ collision_monitor:
     base_frame_id: "base_footprint"
     odom_frame_id: "odom"
     cmd_vel_in_topic: "cmd_vel_smoothed"
-    cmd_vel_out_topic: "cmd_vel"
+    cmd_vel_out_topic: "cmd_vel_collision_out"
     state_topic: "collision_monitor_state"
     transform_tolerance: 0.2
     source_timeout: 1.0

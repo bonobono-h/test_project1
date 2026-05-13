@@ -12,8 +12,8 @@ PARAMS_FILE="$(dirname "$0")/nav2_params.yaml"
 echo "맵 파일: $MAP_FILE"
 echo "파라미터: $PARAMS_FILE"
 
-# velocity_smoother 우회: cmd_vel_nav → cmd_vel 직접 연결
-ros2 run topic_tools relay /cmd_vel_nav /cmd_vel &
+# collision_monitor가 cmd_vel_smoothed → cmd_vel 전달 안 하는 문제 우회
+ros2 run topic_tools relay /cmd_vel_smoothed /cmd_vel &
 RELAY_PID=$!
 
 ros2 launch nav2_bringup bringup_launch.py \
