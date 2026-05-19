@@ -85,7 +85,7 @@ controller_server:
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.5
-      movement_time_allowance: 30.0
+      movement_time_allowance: 15.0
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
@@ -121,14 +121,14 @@ controller_server:
       stateful: True
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.02
-      PathAlign.scale: 32.0
+      PathAlign.scale: 14.0        # 32.0 → 14.0: 경로 방향 집착 완화
       PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 24.0
+      GoalAlign.scale: 14.0        # 24.0 → 14.0: 목표 접근 각도 완화
       GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 32.0
+      PathDist.scale: 16.0   # 32.0 → 16.0: 경로에 덜 붙어서 문 중앙으로 자연스럽게
       GoalDist.scale: 24.0
       RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.slowing_factor: 2.0  # 5.0 → 2.0: 회전 시 덜 버벅임
       RotateToGoal.lookahead_time: -1.0
 
 local_costmap:
@@ -144,12 +144,12 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.30   # 빅핑키 반경 (휠베이스 0.475m 기준)
+      robot_radius: 0.30
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
-        observation_sources: scan
+        observation_sources: scan camera
         scan:
           topic: /scan_filtered
           max_obstacle_height: 2.0
@@ -160,10 +160,18 @@ local_costmap:
           raytrace_min_range: 0.0
           obstacle_max_range: 2.5
           obstacle_min_range: 0.0
+        camera:
+          topic: /camera_obstacles
+          max_obstacle_height: 2.0
+          clearing: False
+          marking: True
+          data_type: "PointCloud2"
+          obstacle_max_range: 3.5
+          obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.0
-        inflation_radius: 0.20
+        cost_scaling_factor: 2.0
+        inflation_radius: 0.10
       always_send_full_costmap: True
 
 global_costmap:
@@ -199,7 +207,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.35
+        inflation_radius: 0.25   # 0.35 → 0.25: 글로벌 경로가 문 중앙 더 잘 통과
       always_send_full_costmap: True
 
 map_server:
@@ -332,15 +340,23 @@ collision_monitor:
     source_timeout: 1.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
-    polygons: ["FootprintApproach"]
+    polygons: ["FootprintApproach", "RearCritical"]
     FootprintApproach:
       type: "polygon"
       action_type: "approach"
       footprint_topic: "/local_costmap/published_footprint"
       time_before_collision: 1.2
       simulation_time_step: 0.1
-      min_points: 6
-      visualize: False
+      min_points: 4
+      visualize: True
+    RearCritical:
+      type: "polygon"
+      action_type: "slowdown"
+      # 뒤쪽 긴급 감속 구역: 실제 후면(0.45m) 근처에서 극도로 느리게
+      points: "[[-0.48, -0.26], [-0.48, 0.26], [-0.25, 0.26], [-0.25, -0.26]]"
+      velocity_scaling_factor: 0.05
+      min_points: 3
+      visualize: True
     observation_sources: ["scan"]
     scan:
       type: "scan"

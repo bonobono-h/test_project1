@@ -1,0 +1,50 @@
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="8" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathRecovery">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"
+              error_code_id="{compute_path_error_code}"/>
+            <ReactiveFallback name="ComputePathRecoveryFallback">
+              <GoalUpdated/>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Subtree"
+                service_name="global_costmap/clear_entirely_global_costmap"/>
+            </ReactiveFallback>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPathRecovery">
+          <FollowPath path="{path}" controller_id="FollowPath"
+            error_code_id="{follow_path_error_code}"/>
+          <ReactiveFallback name="FollowPathRecoveryFallback">
+            <GoalUpdated/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree"
+              service_name="local_costmap/clear_entirely_local_costmap"/>
+          </ReactiveFallback>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <!-- 1순위: 후진으로 공간 확보 (벽 근처 회전 실패 시) -->
+          <BackUp backup_dist="0.35" backup_speed="0.12" time_allowance="10"
+            error_code_id="{backup_error_code}"/>
+          <!-- 2순위: 기다림 - 사람이 지나갈 때까지 대기 -->
+          <Wait wait_duration="10"/>
+          <!-- 3순위: 코스트맵 초기화 - 유령 장애물 제거 -->
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Context"
+              service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context"
+              service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <!-- 4순위: 한 번 더 대기 -->
+          <Wait wait_duration="10"/>
+          <!-- 5순위: 회전 (최후 수단) -->
+          <Spin spin_dist="1.57" time_allowance="10"
+            error_code_id="{spin_error_code}"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>
