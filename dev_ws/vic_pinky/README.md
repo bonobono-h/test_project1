@@ -77,22 +77,29 @@ chmod +x ~/run_usb_cam.sh
 bash ~/run_usb_cam.sh
 ```
 
-### 2단계 — 노트북 (터미널 4개)
+### 2단계 — 노트북 (터미널 6개)
 
 ```bash
-# 터미널 1: Nav2 자율주행 실행
+# 터미널 1: Pillar filter (Nav2 실행 전 먼저!)
+bash ~/dev_ws/vic_pinky/run_pillar_filter.sh
+
+# 터미널 2: Nav2 자율주행 실행
 bash ~/dev_ws/vic_pinky/run_nav2.sh
 
-# 터미널 2: YOLO 장애물 감지 + 추종 노드
+# 터미널 3: Door pass filter (통로 통과 시 angular 억제)
+bash ~/dev_ws/vic_pinky/run_door_pass.sh
+
+# 터미널 4: YOLO 장애물 감지 + 추종 노드
 bash ~/dev_ws/vic_pinky/run_yolo.sh
 
-# 터미널 3: 웹 UI 서버 → http://localhost:8080
+# 터미널 5: 웹 UI 서버 → http://localhost:8080
 bash ~/dev_ws/vic_pinky/run_web.sh
 
-# 터미널 4: RViz 시각화
+# 터미널 6: RViz 시각화
 bash ~/dev_ws/vic_pinky/run_rviz.sh
 ```
 
+> Pillar filter → Nav2 → Door pass 순서로 실행  
 > Nav2가 `Managed nodes are active` 출력 후 YOLO 노드 실행
 
 ---
@@ -142,7 +149,8 @@ vic_pinky/
 ├── run_yolo.sh              # YOLO 노드 실행
 ├── run_web.sh               # 웹 UI 서버 실행
 ├── run_rviz.sh              # RViz 실행
-├── run_viewer.sh            # YOLO 디버그 화면 뷰어
+├── run_pillar_filter.sh     # Pillar filter 실행
+├── run_door_pass.sh         # Door pass filter 실행
 │
 ├── nav2.sh                  # Nav2 내부 실행 스크립트
 ├── nav2_params.yaml         # Nav2 파라미터
@@ -152,7 +160,9 @@ vic_pinky/
 ├── save_map.sh              # 지도 저장
 │
 ├── yolo_nav_node.py         # YOLO 통합 노드 (장애물감지 + 사람추종)
-├── web_control.py           # FastAPI 웹 UI 서버
+├── web_control.py           # FastAPI 웹 UI + 카메라 라이브 피드
+├── pillar_filter_node.py    # 알루미늄 기둥 마스킹 필터
+├── door_pass_node.py        # 문 통과 시 angular 억제 필터
 ├── follower_udp.py          # 구버전 UDP 기반 추종 (참고용)
 │
 ├── fastdds_vicpinky.xml     # FastDDS 네트워크 설정
@@ -180,7 +190,8 @@ vic_pinky/
 | 파라미터 | 값 | 설명 |
 |---------|-----|------|
 | `follow_target_dist` | 0.8m | 사람 추종 목표 거리 |
-| `follow_max_speed` | 0.25 m/s | 추종 최대 속도 |
+| `follow_max_speed` | 0.40 m/s | 추종 최대 속도 |
+| `follow_max_angular` | 0.7 rad/s | 추종 최대 회전 속도 |
 | `CAM_HFOV` | 60° | 웹캠 수평 화각 |
 | `person safety_radius` | 0.8m | 사람 costmap 마진 |
 
@@ -193,5 +204,31 @@ vic_pinky/
 | 로봇이 안 움직임 | TF 시간 오차 | 양쪽에서 `chronyc makestep` |
 | 문 앞에서 진동 | inflation 너무 큼 | local inflation_radius 확인 |
 | 뒤에 박음 | robot_radius 0.30이 실제 후면 0.45 못 커버 | RearCritical polygon으로 감속 |
-| 라이다 토픽 없음 | ROS_DOMAIN_ID 불일치 | bringup.sh에 `export ROS_DOMAIN_ID=28` 확인 |
-| cmd_vel 무반응 | collision_monitor relay 미연결 | nav2.sh relay 토픽 확인 |
+| 라이다 토픽 없음 | `/dev/lidar` 심링크 없음 | USB 케이블 재연결 후 bringup 재시작 |
+| cmd_vel 무반응 | collision_monitor가 pillar를 장애물로 인식 | collision_monitor scan 토픽을 `scan_filtered_safe`로 설정 |
+| goal 전송해도 이동 없음 | nav2.sh 재시작마다 relay 프로세스 누적 → cmd_vel 충돌 | `pkill -f "topic_tools relay"` 후 재시작 |
+| /odom 수신 불가 | FastDDS 프로파일 미설정 | `FASTRTPS_DEFAULT_PROFILES_FILE` 환경변수 확인 |
+| 웹 UI 8080 포트 충돌 | 이전 web_control.py 프로세스 잔존 | `pkill -f web_control.py` 후 재시작 |
+
+---
+
+## 오늘의 삽질 기록 (2026-05-20)
+
+### 1. relay 프로세스 누적 문제
+- `nav2.sh`에서 매번 `ros2 run topic_tools relay` 를 background로 띄우고 kill을 안 함
+- Nav2 재시작할 때마다 relay가 쌓여서 `/cmd_vel`에 13개 퍼블리셔가 생김
+- **해결**: nav2.sh에서 relay 제거, `door_pass_node.py`가 `cmd_vel_collision_out → cmd_vel` 담당
+
+### 2. collision_monitor가 자기 기둥을 장애물로 인식
+- collision_monitor scan 토픽이 `/scan` (raw) → 알루미늄 프레임 기둥이 그대로 들어옴
+- FootprintApproach가 기둥을 전방 장애물로 인식 → cmd_vel_collision_out 완전 차단
+- **해결**: collision_monitor scan 토픽을 `/scan_filtered_safe`로 변경 (pillar_filter 거친 것)
+
+### 3. 문 통과 시 바퀴 걸림
+- DWB가 문 통과 중 회전 명령을 내려서 로봇이 비껴 통과
+- door_pass_node 추가: 라이다 좌우 감지로 좁은 통로 판단 → angular.z 0.25배 감쇠
+- **결과**: 통로 중심 직진 유지, 통과 후 정상 회전 복원
+
+### 4. 웹 UI 카메라 라이브 피드 추가
+- `/image_raw/compressed` → MJPEG 스트리밍 → `<img src="/video">` 방식으로 web_control.py에 통합
+- 기존 모드 전환 UI 위에 카메라 피드 표시

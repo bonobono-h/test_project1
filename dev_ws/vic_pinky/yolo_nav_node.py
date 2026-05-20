@@ -13,11 +13,10 @@ import cv2
 import numpy as np
 import rclpy
 from action_msgs.srv import CancelGoal
-from cv_bridge import CvBridge
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from sensor_msgs.msg import Image, LaserScan, PointCloud2, PointField
+from sensor_msgs.msg import CompressedImage, Image, LaserScan, PointCloud2, PointField
 from std_msgs.msg import String
 from ultralytics import YOLO
 
@@ -49,7 +48,6 @@ class YoloNavNode(Node):
 
         # YOLO 모델
         self.model = YOLO('/home/hong/dev_ws/vic_pinky/yolov8n.pt')
-        self.bridge = CvBridge()
         self.mode = 'nav'
         self.scan = None
         self.lock = threading.Lock()
@@ -61,7 +59,7 @@ class YoloNavNode(Node):
         )
 
         # 구독
-        self.create_subscription(Image,     '/image_raw',   self.image_cb,  10)
+        self.create_subscription(CompressedImage, '/image_raw/compressed', self.image_cb, sensor_qos)
         self.create_subscription(LaserScan, '/scan',        self.lidar_cb,  sensor_qos)
         self.create_subscription(String,    '/robot_mode',  self.mode_cb,   10)
 
@@ -103,7 +101,10 @@ class YoloNavNode(Node):
         self.cmd_pub.publish(Twist())
 
     def image_cb(self, msg):
-        frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        buf = np.frombuffer(msg.data, np.uint8)
+        frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+        if frame is None:
+            return
         results = self.model(frame, verbose=False, conf=0.45)[0]
 
         if self.mode == 'follow':
@@ -116,7 +117,14 @@ class YoloNavNode(Node):
         mode_color = (0, 255, 0) if self.mode == 'nav' else (0, 100, 255)
         cv2.putText(annotated, f'MODE: {self.mode.upper()}', (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, mode_color, 2)
-        debug_msg = self.bridge.cv2_to_imgmsg(annotated, 'bgr8')
+        h, w, c = annotated.shape
+        debug_msg = Image()
+        debug_msg.header.stamp = self.get_clock().now().to_msg()
+        debug_msg.height = h
+        debug_msg.width = w
+        debug_msg.encoding = 'bgr8'
+        debug_msg.step = w * c
+        debug_msg.data = annotated.tobytes()
         self.debug_pub.publish(debug_msg)
 
     # ── NAV 모드: 장애물 → PointCloud2 → Nav2 ────────────────
@@ -173,13 +181,13 @@ class YoloNavNode(Node):
 
             # 회전 제어
             error = (cx - CAM_WIDTH / 2.0) / (CAM_WIDTH / 2.0)
-            twist.angular.z = float(np.clip(-error * 0.8, -0.5, 0.5))
+            twist.angular.z = float(np.clip(-error * 1.0, -0.7, 0.7))
 
             # 직진 제어
             target = 0.8  # 목표 거리 (m)
             if dist is not None:
                 gap = dist - target
-                twist.linear.x = float(np.clip(gap * 0.5, -0.15, 0.25))
+                twist.linear.x = float(np.clip(gap * 0.6, -0.20, 0.40))
             elif best_area > 20000:
                 twist.linear.x = 0.0
             else:

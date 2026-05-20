@@ -12,14 +12,8 @@ PARAMS_FILE="$(dirname "$0")/nav2_params.yaml"
 echo "맵 파일: $MAP_FILE"
 echo "파라미터: $PARAMS_FILE"
 
-# collision_monitor output을 로봇에 전달 (실제 충돌 감지가 작동하도록)
-ros2 run topic_tools relay /cmd_vel_collision_out /cmd_vel &
-RELAY_PID=$!
-
 ros2 launch nav2_bringup bringup_launch.py \
   map:="$MAP_FILE" \
   params_file:="$PARAMS_FILE" \
   use_robot_state_publisher:=False \
   use_sim_time:=False
-
-kill $RELAY_PID 2>/dev/null

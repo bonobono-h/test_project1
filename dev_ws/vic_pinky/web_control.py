@@ -9,17 +9,28 @@ import threading
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from sensor_msgs.msg import CompressedImage
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 import uvicorn
 
 # ── ROS2 노드 ────────────────────────────────────────────────
+
+latest_frame: bytes = None
+frame_lock = threading.Lock()
+
 
 class ModePublisher(Node):
     def __init__(self):
         super().__init__('web_mode_publisher')
         self.pub = self.create_publisher(String, '/robot_mode', 10)
         self.current_mode = 'nav'
+        self.create_subscription(CompressedImage, '/image_raw/compressed', self._cam_cb, 10)
+
+    def _cam_cb(self, msg: CompressedImage):
+        global latest_frame
+        with frame_lock:
+            latest_frame = bytes(msg.data)
 
     def set_mode(self, mode: str):
         self.current_mode = mode
@@ -113,10 +124,37 @@ HTML = """
     .active { opacity: 1; }
     .inactive { opacity: 0.45; }
     small { color: #888; font-size: 0.85rem; }
+    .cam-box {
+      width: 100%;
+      max-width: 480px;
+      background: #0d0d1a;
+      border: 1px solid #0f3460;
+      border-radius: 12px;
+      overflow: hidden;
+      position: relative;
+    }
+    .cam-box img {
+      width: 100%;
+      display: block;
+    }
+    .cam-label {
+      position: absolute;
+      top: 8px; left: 10px;
+      font-size: 0.75rem;
+      color: #4fc3f7;
+      background: rgba(0,0,0,0.5);
+      padding: 2px 8px;
+      border-radius: 8px;
+    }
   </style>
 </head>
 <body>
   <h1>🤖 VicPinky</h1>
+
+  <div class="cam-box">
+    <span class="cam-label">LIVE CAM</span>
+    <img src="/video" alt="카메라 없음 / 미연결">
+  </div>
 
   <div class="status-box">
     현재 모드:&nbsp;
@@ -172,6 +210,23 @@ def set_mode(mode: str):
     if ros_node:
         ros_node.set_mode(mode)
     return {"mode": mode, "status": "ok"}
+
+def _mjpeg_generator():
+    import time
+    while True:
+        with frame_lock:
+            frame = latest_frame
+        if frame:
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        else:
+            time.sleep(0.05)
+
+@app.get("/video")
+def video_feed():
+    return StreamingResponse(
+        _mjpeg_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
 
 @app.get("/status")
 def status():
